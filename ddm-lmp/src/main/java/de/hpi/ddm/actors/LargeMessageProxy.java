@@ -1,6 +1,7 @@
 package de.hpi.ddm.actors;
 
-import java.io.Serializable;
+import java.io.*;
+import java.util.Arrays;
 
 import akka.actor.AbstractLoggingActor;
 import akka.actor.ActorRef;
@@ -39,6 +40,9 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		private T bytes;
 		private ActorRef sender;
 		private ActorRef receiver;
+		public Long length;
+		public Long offset;
+		public Long messageId;
 	}
 	
 	/////////////////
@@ -61,6 +65,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
+	public static final int MAX_BYTE_SIZE = 8192; //max 8kb
 
 	private void handle(LargeMessage<?> message) {
 		ActorRef receiver = message.getReceiver();
@@ -72,7 +77,32 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		// 2. Serialize the object and send its bytes via Akka streaming.
 		// 3. Send the object via Akka's http client-server component.
 		// 4. Other ideas ...
-		receiverProxy.tell(new BytesMessage<>(message.getMessage(), this.sender(), message.getReceiver()), this.self());
+		ByteArrayOutputStream bos = new ByteArrayOutputStream();
+		ObjectOutput out = null;
+		try {
+			out = new ObjectOutputStream(bos);
+			out.writeObject(message);
+			out.flush();
+			byte[] msgBytes = bos.toByteArray();
+			Long messageId = java.util.UUID.randomUUID().node();
+			for(int i = 0; i < msgBytes.length; i += MAX_BYTE_SIZE){
+				BytesMessage<byte[]> part = new BytesMessage<>();
+				part.bytes = Arrays.copyOfRange(msgBytes, i, Math.min(i + MAX_BYTE_SIZE, msgBytes.length));
+				part.length = (long) msgBytes.length;
+				part.offset = (long) i;
+				part.receiver = receiver;
+				part.sender = this.sender();
+				part.messageId = messageId;
+				receiverProxy.tell(part, this.self());
+			}
+		} catch (IOException e) {
+			this.log().error("Failed to serialize {}", e.getMessage());
+		} finally {
+			try {
+				bos.close();
+			} catch (IOException ex) {
+			}
+		}
 	}
 
 	private void handle(BytesMessage<?> message) {
