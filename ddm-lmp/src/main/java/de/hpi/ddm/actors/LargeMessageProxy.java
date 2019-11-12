@@ -131,7 +131,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 			try (ObjectInputStream objectInputStream =
 						new ObjectInputStream(inputStream)){
 				LargeMessage<?> origMsg = (LargeMessage<?>) objectInputStream.readObject();
-				origMsg.getReceiver().tell(origMsg.message, origMsg.getSender());
+				message.getReceiver().tell(origMsg.message, message.sender);
 			} catch (Exception e) {
 				this.log().error("Failed to deserialize {}", e.getMessage());
 			}
