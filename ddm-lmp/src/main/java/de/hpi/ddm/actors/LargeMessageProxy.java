@@ -1,12 +1,18 @@
 package de.hpi.ddm.actors;
 
 import java.io.*;
+import java.lang.reflect.Array;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import akka.actor.AbstractLoggingActor;
 import akka.actor.ActorRef;
 import akka.actor.ActorSelection;
 import akka.actor.Props;
+import it.unimi.dsi.fastutil.Hash;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -40,8 +46,8 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		private T bytes;
 		private ActorRef sender;
 		private ActorRef receiver;
-		public Long length;
-		public Long offset;
+		public int length;
+		public int offset;
 		public Long messageId;
 	}
 	
@@ -88,8 +94,8 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 			for(int i = 0; i < msgBytes.length; i += MAX_BYTE_SIZE){
 				BytesMessage<byte[]> part = new BytesMessage<>();
 				part.bytes = Arrays.copyOfRange(msgBytes, i, Math.min(i + MAX_BYTE_SIZE, msgBytes.length));
-				part.length = (long) msgBytes.length;
-				part.offset = (long) i;
+				part.length = msgBytes.length;
+				part.offset = i;
 				part.receiver = receiver;
 				part.sender = this.sender();
 				part.messageId = messageId;
@@ -105,8 +111,31 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		}
 	}
 
+	private Map<Long, Map<Integer, byte[]>> messageBuffer;
+
 	private void handle(BytesMessage<?> message) {
-		// Reassemble the message content, deserialize it and/or load the content from some local location before forwarding its content.
-		message.getReceiver().tell(message.getBytes(), message.getSender());
+		if (messageBuffer == null) {
+			this.messageBuffer = new HashMap<>();
+		}
+		if(!messageBuffer.containsKey(message.messageId)){
+			messageBuffer.put(message.messageId, new HashMap<>());
+		}
+		Map<Integer, byte[]> chunkMap =  messageBuffer.get(message.messageId);
+		chunkMap.put(message.offset, (byte[])message.bytes);
+		if(chunkMap.size() == Math.ceil(message.length * 1.0 / MAX_BYTE_SIZE)){
+			byte[] finalMsg = new byte[message.length];
+			for (Integer offset :  chunkMap.keySet().stream().sorted().collect(Collectors.toList())) {
+				System.arraycopy(chunkMap.get(offset), 0, finalMsg, offset, chunkMap.get(offset).length);
+			}
+			ByteArrayInputStream inputStream = new ByteArrayInputStream(finalMsg);
+			try (ObjectInputStream objectInputStream =
+						new ObjectInputStream(inputStream)){
+				LargeMessage<?> origMsg = (LargeMessage<?>) objectInputStream.readObject();
+				origMsg.getReceiver().tell(origMsg.message, origMsg.getSender());
+			} catch (Exception e) {
+				this.log().error("Failed to deserialize {}", e.getMessage());
+			}
+		}
+
 	}
 }
