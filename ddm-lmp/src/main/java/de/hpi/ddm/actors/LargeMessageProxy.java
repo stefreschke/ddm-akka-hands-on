@@ -4,10 +4,6 @@ import akka.actor.AbstractLoggingActor;
 import akka.actor.ActorRef;
 import akka.actor.ActorSelection;
 import akka.actor.Props;
-import akka.serialization.Serialization;
-import akka.serialization.SerializationExtension;
-import akka.serialization.Serializer;
-import akka.serialization.Serializers;
 import de.hpi.ddm.structures.KryoPoolSingleton;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -16,7 +12,6 @@ import lombok.NoArgsConstructor;
 import java.io.Serializable;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -37,59 +32,62 @@ public class LargeMessageProxy extends AbstractLoggingActor {
                         .info("Received unknown message: \"{}\"", object.toString())).build();
     }
 
-    private List<BytesMessage<Byte[]>> serialize(LargeMessage<?> message) {
-        Serialization serialization = SerializationExtension.get(this.context().system());
-
-        byte[] bytes = serialization.serialize(message).get();
-        Serializer serializer = serialization.findSerializerFor(message);
-        int serializerId = serializer.identifier();
-        String manifest = Serializers.manifestFor(serializer, message);
-        return null;
-    }
-
-    private LargeMessage<?> deserialize(List<BytesMessage<byte[]>> bytesMessages) {
-        return null;
+    private BytesMessage<byte[]> buildChunk(ActorRef receiver, byte[] bytes, int offset, long messageId, int totalLength) {
+        BytesMessage<byte[]> byteMessage = new BytesMessage<>();
+        byteMessage.bytes = bytes;
+        byteMessage.length = totalLength;
+        byteMessage.offset = offset;
+        byteMessage.receiver = receiver;
+        byteMessage.sender = this.sender();
+        byteMessage.messageId = messageId;
+        return byteMessage;
     }
 
     private void handle(LargeMessage<?> message) {
         ActorRef receiver = message.getReceiver();
         ActorSelection receiverProxy = this.context()
                 .actorSelection(receiver.path().child(DEFAULT_NAME));
-        byte[] msgBytes = KryoPoolSingleton.get().toBytesWithClass(message.getMessage());
-        Long messageId = java.util.UUID.randomUUID().getLeastSignificantBits();
-        for (int i = 0; i < msgBytes.length; i += MAX_BYTE_SIZE) {
-            BytesMessage<byte[]> part = new BytesMessage<>();
-            part.bytes = Arrays
-                    .copyOfRange(msgBytes, i, Math.min(i + MAX_BYTE_SIZE, msgBytes.length));
-            part.length = msgBytes.length;
-            part.offset = i;
-            part.receiver = receiver;
-            part.sender = this.sender();
-            part.messageId = messageId;
-            receiverProxy.tell(part, this.self());
+        byte[] allBytes = KryoPoolSingleton.get().toBytesWithClass(message.getMessage());
+        long messageId = java.util.UUID.randomUUID().getLeastSignificantBits();
+        for (int i = 0; i < allBytes.length; i += MAX_BYTE_SIZE) {
+            receiverProxy.tell(buildChunk(receiver, Arrays
+                    .copyOfRange(allBytes, i, Math.min(i + MAX_BYTE_SIZE, allBytes.length)), i, messageId, allBytes.length), this.self());
         }
     }
 
-    private void handle(BytesMessage<?> message) {
+    private void setupMessageBufferForMessageId(long messageId) {
         if (messageBuffer == null) {
             this.messageBuffer = new HashMap<>();
         }
-        if (!messageBuffer.containsKey(message.messageId)) {
-            messageBuffer.put(message.messageId, new HashMap<>());
+        if (!messageBuffer.containsKey(messageId)) {
+            messageBuffer.put(messageId, new HashMap<>());
         }
-        Map<Integer, byte[]> chunkMap = messageBuffer.get(message.messageId);
-        chunkMap.put(message.offset, (byte[]) message.bytes);
-        if (chunkMap.size() == Math.ceil(message.length * 1.0 / MAX_BYTE_SIZE)) {
-            byte[] finalMsg = new byte[message.length];
+    }
+
+    private Object decodeChunks(int totalLength, Map<Integer, byte[]> chunkMap){
+            byte[] finalMsg = new byte[totalLength];
             for (Integer offset : chunkMap.keySet().stream().sorted()
                     .collect(Collectors.toList())) {
                 System.arraycopy(chunkMap.get(offset), 0, finalMsg, offset,
                         chunkMap.get(offset).length);
             }
-            Object origMsg =  KryoPoolSingleton.get().fromBytes(finalMsg);
+            Object origMsg = KryoPoolSingleton.get().fromBytes(finalMsg);
+            return origMsg;
+    }
+
+    private boolean isDoneDeserializing(int chunkCount, int totalLength) {
+        return chunkCount == Math.ceil(totalLength * 1.0 / MAX_BYTE_SIZE);
+    }
+
+    private void handle(BytesMessage<?> message) {
+        setupMessageBufferForMessageId(message.messageId);
+        Map<Integer, byte[]> chunkMap = messageBuffer.get(message.messageId);
+        chunkMap.put(message.offset, (byte[]) message.bytes);
+
+        if (isDoneDeserializing(chunkMap.size(), message.length)) {
+            Object origMsg = decodeChunks(message.length, chunkMap);
             message.getReceiver().tell(origMsg, message.sender);
         }
-
     }
 
     @Data
