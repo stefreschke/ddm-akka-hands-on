@@ -11,7 +11,6 @@ import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -19,7 +18,6 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 
     public static final String DEFAULT_NAME = "largeMessageProxy";
     public static final int MAX_BYTE_SIZE = 8192; //max 8kb
-    private Map<Long, Map<Integer, byte[]>> messageBuffer;
 
     public static Props props() {
         return Props.create(LargeMessageProxy.class);
@@ -32,7 +30,8 @@ public class LargeMessageProxy extends AbstractLoggingActor {
                         .info("Received unknown message: \"{}\"", object.toString())).build();
     }
 
-    private BytesMessage<byte[]> buildChunk(ActorRef receiver, byte[] bytes, int offset, long messageId, int totalLength) {
+    private BytesMessage<byte[]> buildChunk(ActorRef receiver, byte[] bytes, int offset,
+                                            long messageId, int totalLength) {
         BytesMessage<byte[]> byteMessage = new BytesMessage<>();
         byteMessage.bytes = bytes;
         byteMessage.length = totalLength;
@@ -50,29 +49,20 @@ public class LargeMessageProxy extends AbstractLoggingActor {
         byte[] allBytes = KryoPoolSingleton.get().toBytesWithClass(message.getMessage());
         long messageId = java.util.UUID.randomUUID().getLeastSignificantBits();
         for (int i = 0; i < allBytes.length; i += MAX_BYTE_SIZE) {
-            receiverProxy.tell(buildChunk(receiver, Arrays
-                    .copyOfRange(allBytes, i, Math.min(i + MAX_BYTE_SIZE, allBytes.length)), i, messageId, allBytes.length), this.self());
+            receiverProxy.tell(buildChunk(receiver,
+                    Arrays.copyOfRange(allBytes, i, Math.min(i + MAX_BYTE_SIZE, allBytes.length)),
+                    i, messageId, allBytes.length), this.self());
         }
     }
 
-    private void setupMessageBufferForMessageId(long messageId) {
-        if (messageBuffer == null) {
-            this.messageBuffer = new HashMap<>();
+    private Object decodeChunks(int totalLength, Map<Integer, byte[]> chunkMap) {
+        byte[] finalMsg = new byte[totalLength];
+        for (Integer offset : chunkMap.keySet().stream().sorted().collect(Collectors.toList())) {
+            System.arraycopy(chunkMap.get(offset), 0, finalMsg, offset,
+                    chunkMap.get(offset).length);
         }
-        if (!messageBuffer.containsKey(messageId)) {
-            messageBuffer.put(messageId, new HashMap<>());
-        }
-    }
-
-    private Object decodeChunks(int totalLength, Map<Integer, byte[]> chunkMap){
-            byte[] finalMsg = new byte[totalLength];
-            for (Integer offset : chunkMap.keySet().stream().sorted()
-                    .collect(Collectors.toList())) {
-                System.arraycopy(chunkMap.get(offset), 0, finalMsg, offset,
-                        chunkMap.get(offset).length);
-            }
-            Object origMsg = KryoPoolSingleton.get().fromBytes(finalMsg);
-            return origMsg;
+        Object origMsg = KryoPoolSingleton.get().fromBytes(finalMsg);
+        return origMsg;
     }
 
     private boolean isDoneDeserializing(int chunkCount, int totalLength) {
@@ -80,8 +70,11 @@ public class LargeMessageProxy extends AbstractLoggingActor {
     }
 
     private void handle(BytesMessage<?> message) {
-        setupMessageBufferForMessageId(message.messageId);
-        Map<Integer, byte[]> chunkMap = messageBuffer.get(message.messageId);
+        ByteMessageBuffer.getBuffer()
+                .storeChunkOn(message.messageId, message.offset, (byte[]) message.bytes);
+        Map<Integer, byte[]> chunkMap = ByteMessageBuffer.getBuffer()
+                .getChunkMap(message.messageId);
+
         chunkMap.put(message.offset, (byte[]) message.bytes);
 
         if (isDoneDeserializing(chunkMap.size(), message.length)) {
