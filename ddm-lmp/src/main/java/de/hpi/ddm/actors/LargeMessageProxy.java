@@ -1,16 +1,19 @@
 package de.hpi.ddm.actors;
 
-import akka.actor.*;
+import akka.actor.AbstractLoggingActor;
+import akka.actor.ActorRef;
+import akka.actor.ActorSelection;
+import akka.actor.Props;
 import akka.serialization.Serialization;
 import akka.serialization.SerializationExtension;
+import akka.serialization.Serializer;
 import akka.serialization.Serializers;
-import com.esotericsoftware.kryo.Kryo;
 import de.hpi.ddm.structures.KryoPoolSingleton;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.io.*;
+import java.io.Serializable;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -35,7 +38,17 @@ public class LargeMessageProxy extends AbstractLoggingActor {
     }
 
     private List<BytesMessage<Byte[]>> serialize(LargeMessage<?> message) {
-    	return null;
+        Serialization serialization = SerializationExtension.get(this.context().system());
+
+        byte[] bytes = serialization.serialize(message).get();
+        Serializer serializer = serialization.findSerializerFor(message);
+        int serializerId = serializer.identifier();
+        String manifest = Serializers.manifestFor(serializer, message);
+        return null;
+    }
+
+    private LargeMessage<?> deserialize(List<BytesMessage<byte[]>> bytesMessages) {
+        return null;
     }
 
     private void handle(LargeMessage<?> message) {
@@ -43,12 +56,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
         ActorSelection receiverProxy = this.context()
                 .actorSelection(receiver.path().child(DEFAULT_NAME));
 
-        // This will definitely fail in a distributed setting if the serialized message is large!
-        // Solution options:
-        // 1. Serialize the object and send its bytes batch-wise (make sure to use artery's side channel then).
-        // 2. Serialize the object and send its bytes via Akka streaming.
-        // 3. Send the object via Akka's http client-server component.
-        // 4. Other ideas ...
+
         byte[] msgBytes = KryoPoolSingleton.get().toBytesWithoutClass(message);
         Long messageId = java.util.UUID.randomUUID().getLeastSignificantBits();
         for (int i = 0; i < msgBytes.length; i += MAX_BYTE_SIZE) {
