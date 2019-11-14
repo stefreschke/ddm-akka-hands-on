@@ -4,6 +4,8 @@ import akka.actor.*;
 import akka.serialization.Serialization;
 import akka.serialization.SerializationExtension;
 import akka.serialization.Serializers;
+import com.esotericsoftware.kryo.Kryo;
+import de.hpi.ddm.structures.KryoPoolSingleton;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -47,32 +49,18 @@ public class LargeMessageProxy extends AbstractLoggingActor {
         // 2. Serialize the object and send its bytes via Akka streaming.
         // 3. Send the object via Akka's http client-server component.
         // 4. Other ideas ...
-        ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        ObjectOutput out = null;
-        try {
-            out = new ObjectOutputStream(bos);
-            out.writeObject(message);
-            out.flush();
-            byte[] msgBytes = bos.toByteArray();
-            Long messageId = java.util.UUID.randomUUID().getLeastSignificantBits();
-            for (int i = 0; i < msgBytes.length; i += MAX_BYTE_SIZE) {
-                BytesMessage<byte[]> part = new BytesMessage<>();
-                part.bytes = Arrays
-                        .copyOfRange(msgBytes, i, Math.min(i + MAX_BYTE_SIZE, msgBytes.length));
-                part.length = msgBytes.length;
-                part.offset = i;
-                part.receiver = receiver;
-                part.sender = this.sender();
-                part.messageId = messageId;
-                receiverProxy.tell(part, this.self());
-            }
-        } catch (IOException e) {
-            this.log().error("Failed to serialize {}", e.getMessage());
-        } finally {
-            try {
-                bos.close();
-            } catch (IOException ex) {
-            }
+        byte[] msgBytes = KryoPoolSingleton.get().toBytesWithoutClass(message);
+        Long messageId = java.util.UUID.randomUUID().getLeastSignificantBits();
+        for (int i = 0; i < msgBytes.length; i += MAX_BYTE_SIZE) {
+            BytesMessage<byte[]> part = new BytesMessage<>();
+            part.bytes = Arrays
+                    .copyOfRange(msgBytes, i, Math.min(i + MAX_BYTE_SIZE, msgBytes.length));
+            part.length = msgBytes.length;
+            part.offset = i;
+            part.receiver = receiver;
+            part.sender = this.sender();
+            part.messageId = messageId;
+            receiverProxy.tell(part, this.self());
         }
     }
 
@@ -92,13 +80,8 @@ public class LargeMessageProxy extends AbstractLoggingActor {
                 System.arraycopy(chunkMap.get(offset), 0, finalMsg, offset,
                         chunkMap.get(offset).length);
             }
-            ByteArrayInputStream inputStream = new ByteArrayInputStream(finalMsg);
-            try (ObjectInputStream objectInputStream = new ObjectInputStream(inputStream)) {
-                LargeMessage<?> origMsg = (LargeMessage<?>) objectInputStream.readObject();
-                message.getReceiver().tell(origMsg.message, message.sender);
-            } catch (Exception e) {
-                this.log().error("Failed to deserialize {}", e.getMessage());
-            }
+            LargeMessage<?> origMsg = (LargeMessage<?>) KryoPoolSingleton.get().fromBytes(finalMsg);
+            message.getReceiver().tell(origMsg.message, message.sender);
         }
 
     }
