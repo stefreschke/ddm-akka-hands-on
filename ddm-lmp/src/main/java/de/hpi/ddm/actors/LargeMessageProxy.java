@@ -49,7 +49,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
         // 2. Serialize the object and send its bytes via Akka streaming.
         // 3. Send the object via Akka's http client-server component.
         // 4. Other ideas ...
-        byte[] msgBytes = KryoPoolSingleton.get().toBytesWithoutClass(message);
+        byte[] msgBytes = KryoPoolSingleton.get().toBytesWithClass(message.getMessage());
         Long messageId = java.util.UUID.randomUUID().getLeastSignificantBits();
         for (int i = 0; i < msgBytes.length; i += MAX_BYTE_SIZE) {
             BytesMessage<byte[]> part = new BytesMessage<>();
@@ -80,8 +80,8 @@ public class LargeMessageProxy extends AbstractLoggingActor {
                 System.arraycopy(chunkMap.get(offset), 0, finalMsg, offset,
                         chunkMap.get(offset).length);
             }
-            LargeMessage<?> origMsg = (LargeMessage<?>) KryoPoolSingleton.get().fromBytes(finalMsg);
-            message.getReceiver().tell(origMsg.message, message.sender);
+            Object origMsg =  KryoPoolSingleton.get().fromBytes(finalMsg);
+            message.getReceiver().tell(origMsg, message.sender);
         }
 
     }
