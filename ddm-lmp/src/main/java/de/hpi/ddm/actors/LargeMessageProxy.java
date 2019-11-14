@@ -90,7 +90,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 			out.writeObject(message);
 			out.flush();
 			byte[] msgBytes = bos.toByteArray();
-			Long messageId = java.util.UUID.randomUUID().node();
+			Long messageId = java.util.UUID.randomUUID().getLeastSignificantBits();
 			for(int i = 0; i < msgBytes.length; i += MAX_BYTE_SIZE){
 				BytesMessage<byte[]> part = new BytesMessage<>();
 				part.bytes = Arrays.copyOfRange(msgBytes, i, Math.min(i + MAX_BYTE_SIZE, msgBytes.length));
@@ -122,7 +122,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		}
 		Map<Integer, byte[]> chunkMap =  messageBuffer.get(message.messageId);
 		chunkMap.put(message.offset, (byte[])message.bytes);
-		if(chunkMap.size() == Math.ceil(message.length * 1.0 / MAX_BYTE_SIZE)){
+		if (chunkMap.size() == Math.ceil(message.length * 1.0 / MAX_BYTE_SIZE)){
 			byte[] finalMsg = new byte[message.length];
 			for (Integer offset :  chunkMap.keySet().stream().sorted().collect(Collectors.toList())) {
 				System.arraycopy(chunkMap.get(offset), 0, finalMsg, offset, chunkMap.get(offset).length);
