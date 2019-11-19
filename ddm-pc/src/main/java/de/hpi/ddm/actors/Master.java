@@ -103,8 +103,6 @@ public class Master extends AbstractLoggingActor {
 		
 		if (message.getLines().isEmpty()) {
 			this.collector.tell(new Collector.PrintMessage(), this.self());
-			this.terminate();
-			return;
 		}
 		
 		for (String[] line : message.getLines())

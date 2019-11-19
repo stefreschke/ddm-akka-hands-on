@@ -1,9 +1,13 @@
 package de.hpi.ddm.actors;
 
+import java.io.Serializable;
 import java.io.UnsupportedEncodingException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 import akka.actor.AbstractLoggingActor;
 import akka.actor.ActorRef;
@@ -16,6 +20,9 @@ import akka.cluster.ClusterEvent.MemberUp;
 import akka.cluster.Member;
 import akka.cluster.MemberStatus;
 import de.hpi.ddm.MasterSystem;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
 public class Worker extends AbstractLoggingActor {
 
@@ -24,6 +31,8 @@ public class Worker extends AbstractLoggingActor {
 	////////////////////////
 	
 	public static final String DEFAULT_NAME = "worker";
+	private ConcurrentMap<String, Boolean> memory;
+
 
 	public static Props props() {
 		return Props.create(Worker.class);
@@ -31,11 +40,37 @@ public class Worker extends AbstractLoggingActor {
 
 	public Worker() {
 		this.cluster = Cluster.get(this.context().system());
+		this.memory = new ConcurrentHashMap<>();
 	}
 	
 	////////////////////
 	// Actor Messages //
 	////////////////////
+
+	/**
+	 * Nachricht, die ein Worker vom Master bekommt um ein bestimmtes Charset abzusuchen.
+	 */
+	@Data
+	@NoArgsConstructor
+	@AllArgsConstructor
+	public static class WasDerWorkerTunSoll implements Serializable {
+		private static final long serialVersionUID = 4057807743872319842L;
+		private String hashedPassword;
+		private List<Set<Character>> charSets;
+		private int passwordLength;
+	}
+
+	/**
+	 * Nachricht, die ein Worker an den Master sendet, wenn ein Hint aufgelöst werden konnte.
+	 */
+	@Data
+	@NoArgsConstructor
+	@AllArgsConstructor
+	public static class FertigePasswoerter implements Serializable {
+		private static final long serialVersionUID = 4057807743872319842L;
+		private String hashedPassword;
+		private String solution;
+	}
 
 	/////////////////
 	// Actor State //
@@ -70,6 +105,7 @@ public class Worker extends AbstractLoggingActor {
 				.match(CurrentClusterState.class, this::handle)
 				.match(MemberUp.class, this::handle)
 				.match(MemberRemoved.class, this::handle)
+				.match(WasDerWorkerTunSoll.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -79,6 +115,18 @@ public class Worker extends AbstractLoggingActor {
 			if (member.status().equals(MemberStatus.up()))
 				this.register(member);
 		});
+	}
+
+	private void handle(WasDerWorkerTunSoll message) {
+		List<Set<Character>> charSets = message.getCharSets();
+		memory.put(message.hashedPassword, true);
+		for (Set<Character> charSet : charSets) {
+			if (memory.get(message.hashedPassword)) {
+				// brute force
+			} else {
+				return;
+			}
+		}
 	}
 
 	private void handle(MemberUp message) {
