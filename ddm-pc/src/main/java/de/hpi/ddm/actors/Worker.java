@@ -4,6 +4,8 @@ import java.io.Serializable;
 import java.io.UnsupportedEncodingException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -31,7 +33,7 @@ public class Worker extends AbstractLoggingActor {
 	////////////////////////
 	
 	public static final String DEFAULT_NAME = "worker";
-	private ConcurrentMap<String, Boolean> memory;
+	private ConcurrentMap<Integer, Boolean> memory;
 
 
 	public static Props props() {
@@ -53,10 +55,11 @@ public class Worker extends AbstractLoggingActor {
 	@Data
 	@NoArgsConstructor
 	@AllArgsConstructor
-	public static class WasDerWorkerTunSoll implements Serializable {
-		private static final long serialVersionUID = 4057807743872319842L;
+	public static class DoWorkMessage implements Serializable {
+		private static final long serialVersionUID = 8940654955411400433L;
+		private int id;
 		private String hashedPassword;
-		private List<Set<Character>> charSets;
+		private List<char[]> charSets;
 		private int passwordLength;
 	}
 
@@ -66,10 +69,18 @@ public class Worker extends AbstractLoggingActor {
 	@Data
 	@NoArgsConstructor
 	@AllArgsConstructor
-	public static class FertigePasswoerter implements Serializable {
-		private static final long serialVersionUID = 4057807743872319842L;
-		private String hashedPassword;
+	public static class WorkFinishedMessage implements Serializable {
+		private static final long serialVersionUID = 5400388160563796770L;
+		private int id;
 		private String solution;
+	}
+
+	@Data
+	@NoArgsConstructor
+	@AllArgsConstructor
+	public static class AbortWorkMessage implements Serializable {
+		private static final long serialVersionUID = -2680862716297857008L;
+		private int id;
 	}
 
 	/////////////////
@@ -105,7 +116,8 @@ public class Worker extends AbstractLoggingActor {
 				.match(CurrentClusterState.class, this::handle)
 				.match(MemberUp.class, this::handle)
 				.match(MemberRemoved.class, this::handle)
-				.match(WasDerWorkerTunSoll.class, this::handle)
+				.match(DoWorkMessage.class, this::handle)
+				.match(AbortWorkMessage.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -117,14 +129,33 @@ public class Worker extends AbstractLoggingActor {
 		});
 	}
 
-	private void handle(WasDerWorkerTunSoll message) {
-		List<Set<Character>> charSets = message.getCharSets();
-		memory.put(message.hashedPassword, true);
-		for (Set<Character> charSet : charSets) {
-			if (memory.get(message.hashedPassword)) {
-				// brute force
-			} else {
-				return;
+	private void handle(AbortWorkMessage message) {
+		memory.put(message.id, false);
+	}
+
+	private void handle(DoWorkMessage message) {
+		List<char[]> charSets = message.getCharSets();
+		if(!memory.getOrDefault(message.id, true)) return;//check first, might be useful if messages are received out of order
+		memory.put(message.id, true);
+
+		String hashedPassword = message.hashedPassword;
+		byte[] hashedPasswordBytes = hexStringToByteArray(hashedPassword);
+		for (char[] charSet : charSets) {
+			if(!memory.get(message.id)) return; //exit if abort message received
+
+			List<String> permutations = new ArrayList<>();
+			heapPermutation(charSet, message.passwordLength, 1, permutations);
+			for(int i = 0; i < permutations.size(); i++){
+				if(i % 64 == 0 && !memory.get(message.id)) return; //exit if abort message received
+
+				byte[] crackHash = hashBytes(permutations.get(i));
+				if(Arrays.equals(crackHash, hashedPasswordBytes)){//cracked
+					WorkFinishedMessage finishedMsg = new WorkFinishedMessage();
+					finishedMsg.id = message.id;
+					finishedMsg.solution = permutations.get(i);
+					this.sender().tell(finishedMsg, this.self());
+					return;
+				}
 			}
 		}
 	}
@@ -147,7 +178,7 @@ public class Worker extends AbstractLoggingActor {
 		if (this.masterSystem.equals(message.member()))
 			this.self().tell(PoisonPill.getInstance(), ActorRef.noSender());
 	}
-	
+
 	private String hash(String line) {
 		try {
 			MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -158,6 +189,16 @@ public class Worker extends AbstractLoggingActor {
 				stringBuffer.append(Integer.toString((hashedBytes[i] & 0xff) + 0x100, 16).substring(1));
 			}
 			return stringBuffer.toString();
+		}
+		catch (NoSuchAlgorithmException | UnsupportedEncodingException e) {
+			throw new RuntimeException(e.getMessage());
+		}
+	}
+
+	private byte[] hashBytes(String line) {//dont convert to string and strcmp, use byte[]s directly
+		try {
+			MessageDigest digest = MessageDigest.getInstance("SHA-256");
+			return digest.digest(String.valueOf(line).getBytes("UTF-8"));
 		}
 		catch (NoSuchAlgorithmException | UnsupportedEncodingException e) {
 			throw new RuntimeException(e.getMessage());
@@ -189,5 +230,15 @@ public class Worker extends AbstractLoggingActor {
 				a[size - 1] = temp;
 			}
 		}
+	}
+
+	public static byte[] hexStringToByteArray(String s) {
+		int len = s.length();
+		byte[] data = new byte[len / 2];
+		for (int i = 0; i < len; i += 2) {
+			data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
+					+ Character.digit(s.charAt(i+1), 16));
+		}
+		return data;
 	}
 }
