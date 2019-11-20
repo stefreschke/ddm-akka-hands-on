@@ -3,6 +3,8 @@ package de.hpi.ddm.actors;
 import java.io.Serializable;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.stream.Collectors;
 
 import akka.actor.AbstractLoggingActor;
 import akka.actor.ActorRef;
@@ -27,6 +29,7 @@ public class Master extends AbstractLoggingActor {
 		public boolean finished = false;
 	}
 	private static ConcurrentHashMap<Integer, JobStatus> jobStatusMap;
+	private static Queue<Worker.DoWorkMessage> workQueue;
 
 	public static Props props(final ActorRef reader, final ActorRef collector) {
 		return Props.create(Master.class, () -> new Master(reader, collector));
@@ -37,6 +40,7 @@ public class Master extends AbstractLoggingActor {
 		this.collector = collector;
 		this.workers = new ArrayList<>();
 		jobStatusMap = new ConcurrentHashMap<>();
+		workQueue = new ConcurrentLinkedQueue<>();
 	}
 
 	////////////////////
@@ -90,6 +94,7 @@ public class Master extends AbstractLoggingActor {
 				.match(Terminated.class, this::handle)
 				.match(RegistrationMessage.class, this::handle)
 				.match(Worker.WorkFinishedMessage.class, this::handle)
+				.match(Worker.MoreWorkRequest.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -102,16 +107,13 @@ public class Master extends AbstractLoggingActor {
 
 	public List<char[]> generateCombinations(char[] chars, int r) {
 		int n = chars.length;
-		List<char[]> combinations = new ArrayList<>();
-		char[] combination = new char[r];
-
-		Map<Character, Integer> charToIndexMap = new HashMap<>();//required for (1) below as java has no indexOf
-		for(int i = 0; i < n; i++){
-			charToIndexMap.put(chars[i], i);
-		}
+		List<int[]> combinations = new ArrayList<>();
+		int[] combination = new int[r];
 
 		// initialize with lowest lexicographic combination
-		System.arraycopy(chars, 0, combination, 0, r);
+		for (int i = 0; i < r; i++) {
+			combination[i] = i;
+		}
 
 		while (combination[r - 1] < n) {
 			combinations.add(combination.clone());
@@ -123,23 +125,58 @@ public class Master extends AbstractLoggingActor {
 			}
 			combination[t]++;
 			for (int i = t + 1; i < r; i++) {
-				combination[i] = chars[charToIndexMap.get(combination[i - 1]) + 1];//(1)
+				combination[i] = combination[i - 1] + 1;
 			}
 		}
 
-		return combinations;
+		List<char[]> combChars = new ArrayList<>();
+		for (int[] intcomb : combinations) {
+			char[] comb = new char[intcomb.length];
+			for (int j = 0; j < intcomb.length; j++) {
+				comb[j] = chars[intcomb[j]];
+			}
+			combChars.add(comb);
+		}
+		return combChars;
 	}
 
 	protected void handle(Worker.WorkFinishedMessage message) {
 		int id = message.getId();
 		String result = message.getSolution();
-		//TODO: write result somewhere
 
+		//save/collect result
+		String origLine[] = jobStatusMap.get(id).line;
+		origLine[4] = result;
+		String crackedLine = String.join(";", origLine);
+		this.collector.tell(new Collector.CollectMessage(crackedLine), this.self());
+
+		//inform other workers about finished job
 		jobStatusMap.get(id).finished = true;
 		Worker.AbortWorkMessage abort = new Worker.AbortWorkMessage();
 		abort.setId(id);
 		for (ActorRef k: this.workers) {
 			if(!k.equals(this.sender())) k.tell(abort, this.self());
+		}
+
+		//terminate process if all passwords are cracked
+		boolean unfinishedWork = false;
+		for (Map.Entry<Integer, JobStatus> entry : jobStatusMap.entrySet()) {
+			if (!entry.getValue().finished) {
+				unfinishedWork = true;
+				break;
+			}
+		}
+		if(!unfinishedWork){
+			this.log().info("All cracked!");
+			this.collector.tell(new Collector.PrintMessage(), this.self());
+			this.terminate();
+		}
+	}
+
+	protected void handle(Worker.MoreWorkRequest message) {
+		Worker.DoWorkMessage msg = workQueue.poll();
+		if (msg != null) {
+			this.sender().tell(msg, this.self());
 		}
 	}
 	
@@ -154,6 +191,8 @@ public class Master extends AbstractLoggingActor {
 		
 		if (message.getLines().isEmpty()) {
 			this.collector.tell(new Collector.PrintMessage(), this.self());
+			this.distributeWorkInitial();
+			this.terminateReader();
 		}
 		
 		for (String[] line : message.getLines()){
@@ -163,23 +202,23 @@ public class Master extends AbstractLoggingActor {
 			jobStatusMap.put(jobId, status);
 
 			int hintCount = line.length - 5;
-			int passwordCharCount = line[2].length() - hintCount;
 			int passwordLength = Integer.parseInt(line[3]);
 			char[] passwordCharset = line[2].toCharArray();
-
+			int passwordCharCount = passwordCharset.length - hintCount;
 			//calc charset combinations
+
 			List<char[]> combinations = generateCombinations(passwordCharset, passwordCharCount);
-			int workPerNode = combinations.size() / this.workers.size();
+			int workPerNode = Math.min(combinations.size() / workers.size() / 2, 1);
 			int curIndex = 0;
 			for(int node = 0; node < this.workers.size(); node++){
 				int end = curIndex + workPerNode;
-				if(node == this.workers.size() - 1) end = combinations.size(); // last node gets all remaining (rounding errors!)
+				if(node == this.workers.size() - 1) end = combinations.size();
 				Worker.DoWorkMessage msg = new Worker.DoWorkMessage();
 				msg.setHashedPassword(line[4]);
 				msg.setId(jobId);
 				msg.setPasswordLength(passwordLength);
 				msg.setCharSets(combinations.subList(curIndex, end));
-				this.workers.get(node).tell(msg, this.self());
+				workQueue.add(msg);
 				curIndex = end;
 			}
 
@@ -187,6 +226,21 @@ public class Master extends AbstractLoggingActor {
 		
 		this.collector.tell(new Collector.CollectMessage("Processed batch of size " + message.getLines().size()), this.self());
 		this.reader.tell(new Reader.ReadMessage(), this.self());
+	}
+
+	protected void terminateReader(){
+		this.reader.tell(PoisonPill.getInstance(), ActorRef.noSender());
+	}
+
+	private void distributeWorkInitial(){
+		for(ActorRef worker: this.workers){
+			if(!workQueue.isEmpty()){
+				Worker.DoWorkMessage work = workQueue.poll();
+				if(work != null){
+					worker.tell(work, this.self());
+				}
+			}
+		}
 	}
 	
 	protected void terminate() {

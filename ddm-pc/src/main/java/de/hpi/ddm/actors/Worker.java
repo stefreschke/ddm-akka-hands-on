@@ -7,7 +7,6 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -62,6 +61,13 @@ public class Worker extends AbstractLoggingActor {
 		private List<char[]> charSets;
 		private int passwordLength;
 	}
+
+	@Data
+	@NoArgsConstructor
+	public static class MoreWorkRequest implements Serializable {
+		private static final long serialVersionUID = 8329058955803513344L;
+	}
+
 
 	/**
 	 * Nachricht, die ein Worker an den Master sendet, wenn ein Hint aufgelöst werden konnte.
@@ -134,6 +140,13 @@ public class Worker extends AbstractLoggingActor {
 	}
 
 	private void handle(DoWorkMessage message) {
+		doActualWork(message);
+		MoreWorkRequest req = new MoreWorkRequest();
+		this.sender().tell(req, this.self());
+	}
+
+	private void doActualWork(DoWorkMessage message){
+
 		List<char[]> charSets = message.getCharSets();
 		if(!memory.getOrDefault(message.id, true)) return;//check first, might be useful if messages are received out of order
 		memory.put(message.id, true);
@@ -142,11 +155,10 @@ public class Worker extends AbstractLoggingActor {
 		byte[] hashedPasswordBytes = hexStringToByteArray(hashedPassword);
 		for (char[] charSet : charSets) {
 			if(!memory.get(message.id)) return; //exit if abort message received
-
 			List<String> permutations = new ArrayList<>();
-			heapPermutation(charSet, message.passwordLength, 1, permutations);
+			generateAllPermutationsFromCharset(charSet, message.passwordLength, permutations, "");
 			for(int i = 0; i < permutations.size(); i++){
-				if(i % 64 == 0 && !memory.get(message.id)) return; //exit if abort message received
+				if(i % 100 == 0 && !memory.get(message.id)) return; //exit if abort message received
 
 				byte[] crackHash = hashBytes(permutations.get(i));
 				if(Arrays.equals(crackHash, hashedPasswordBytes)){//cracked
@@ -154,6 +166,7 @@ public class Worker extends AbstractLoggingActor {
 					finishedMsg.id = message.id;
 					finishedMsg.solution = permutations.get(i);
 					this.sender().tell(finishedMsg, this.self());
+					this.log().info("Found solution: " + permutations.get(i));
 					return;
 				}
 			}
@@ -171,6 +184,10 @@ public class Worker extends AbstractLoggingActor {
 			this.getContext()
 				.actorSelection(member.address() + "/user/" + Master.DEFAULT_NAME)
 				.tell(new Master.RegistrationMessage(), this.self());
+
+			this.getContext()
+					.actorSelection(member.address() + "/user/" + Master.DEFAULT_NAME)
+					.tell(new MoreWorkRequest(), this.self());
 		}
 	}
 	
@@ -204,17 +221,30 @@ public class Worker extends AbstractLoggingActor {
 			throw new RuntimeException(e.getMessage());
 		}
 	}
-	
+
+	private void generateAllPermutationsFromCharset(char[] a, int size, List<String> l, String current) {
+		for (int i = 0; i < a.length; i++) {
+			String tmp = current + a[i];
+			if(size == 1){
+				l.add(tmp);
+			}else{
+				generateAllPermutationsFromCharset(a, size - 1, l, tmp);
+			}
+
+		}
+	}
+
+
 	// Generating all permutations of an array using Heap's Algorithm
 	// https://en.wikipedia.org/wiki/Heap's_algorithm
 	// https://www.geeksforgeeks.org/heaps-algorithm-for-generating-permutations/
-	private void heapPermutation(char[] a, int size, int n, List<String> l) {
+	private void heapPermutation(char[] a, int size, List<String> l) {
 		// If size is 1, store the obtained permutation
 		if (size == 1)
 			l.add(new String(a));
 
 		for (int i = 0; i < size; i++) {
-			heapPermutation(a, size - 1, n, l);
+			heapPermutation(a, size - 1, l);
 
 			// If size is odd, swap first and last element
 			if (size % 2 == 1) {
