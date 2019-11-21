@@ -167,8 +167,14 @@ public class Master extends AbstractLoggingActor {
 			}
 		}
 		if(!unfinishedWork){
-			this.log().info("All cracked!");
 			this.collector.tell(new Collector.PrintMessage(), this.self());
+			this.log().info("All cracked! Gracefully shutting down now!");
+			this.log().info("Please do not count time after this message as work time!");
+			try {
+				Thread.sleep(1500); //wait for other actors (e.g. collector) to gracefully exit
+			} catch (InterruptedException e) {
+				e.printStackTrace();
+			}
 			this.terminate();
 		}
 	}
@@ -208,11 +214,12 @@ public class Master extends AbstractLoggingActor {
 			//calc charset combinations
 
 			List<char[]> combinations = generateCombinations(passwordCharset, passwordCharCount);
-			int workPerNode = Math.min(combinations.size() / workers.size() / 2, 1);
+			int workerSize = Math.max(workers.size(), 32);
+			int workPerNode = Math.min(combinations.size() / workerSize / 2, 1);
 			int curIndex = 0;
-			for(int node = 0; node < this.workers.size(); node++){
+			for(int node = 0; node < workerSize; node++){
 				int end = curIndex + workPerNode;
-				if(node == this.workers.size() - 1) end = combinations.size();
+				if(node == workerSize - 1) end = combinations.size();
 				Worker.DoWorkMessage msg = new Worker.DoWorkMessage();
 				msg.setHashedPassword(line[4]);
 				msg.setId(jobId);
