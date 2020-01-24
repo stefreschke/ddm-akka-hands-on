@@ -1,4 +1,4 @@
-package de.hpi.spark_tutorial
+package de.hpi.ddm.spark.inds.unary
 
 import org.apache.spark.sql.{Dataset, Row, SparkSession}
 
