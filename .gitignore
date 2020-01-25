@@ -18,3 +18,4 @@ output/
 copyOctopus2Thor.sh
 copyAkkaTutorial2Thor.sh
 ddm-lmp/src/main/java/de/hpi/ddm/solution/*
+/ddm-unary-inds/dependency-reduced-pom.xml

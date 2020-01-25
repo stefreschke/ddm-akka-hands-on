@@ -48,6 +48,11 @@
             <version>2.4.0</version>
             <!--<scope>provided</scope>-->
         </dependency>
+        <dependency>
+            <groupId>com.beust</groupId>
+            <artifactId>jcommander</artifactId>
+            <version>1.78</version>
+        </dependency>
 
         <dependency>
             <groupId>org.junit</groupId>
