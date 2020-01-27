@@ -1,8 +1,7 @@
-package de.hpi.spark_tutorial
-import java.io.File
-import java.util
+package de.hpi.ddm.spark.inds.unary
 
-import de.hpi.ddm.spark.inds.unary.Sindy
+import java.io.File
+
 import org.apache.spark.sql.SparkSession
 
 
@@ -11,22 +10,17 @@ object SimpleSpark extends App {
     println(s"Started main")
 
     //ugly command line parsing
-    import org.apache.commons.cli.CommandLine
-    import org.apache.commons.cli.ParseException
-    import org.apache.commons.cli.DefaultParser
-    import org.apache.commons.cli.HelpFormatter
-    import org.apache.commons.cli.Options
-    import org.apache.commons.cli.Option
+    import org.apache.commons.cli.{CommandLine, DefaultParser, HelpFormatter, Option, Options, ParseException}
 
     val options = new Options
-    val input = new Option("i", "input", true, "input folder path")
-    options.addOption(input)
+    val path = new Option("p", "path", true, "input folder path")
+    options.addOption(path)
     val output = new Option("c", "cores", true, "cores")
     options.addOption(output)
 
     val parser = new DefaultParser
     val formatter = new HelpFormatter
-    var cmd : CommandLine = null
+    var cmd: CommandLine = null
 
 
     try {
@@ -40,17 +34,17 @@ object SimpleSpark extends App {
     }
 
     var inputPath = cmd.getOptionValue("input")
-    if(inputPath == null) inputPath = "./TPCH"
+    if (inputPath == null) inputPath = "./TPCH"
     var coresString = cmd.getOptionValue("cores")
-    if(coresString == null) coresString = "2"
-    val cores =  Integer.valueOf(coresString)
+    if (coresString == null) coresString = "2"
+    val cores = Integer.valueOf(coresString)
 
 
     //real Spark part
     val spark = SparkSession
       .builder()
       .appName("SparkTutorial")
-      .master("local["+cores.toString()+"]").getOrCreate()
+      .master("local[" + cores.toString() + "]").getOrCreate()
     spark.sparkContext.setLogLevel("ERROR") //turn off annoying logs
 
 
