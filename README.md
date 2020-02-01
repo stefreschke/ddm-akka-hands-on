@@ -6,5 +6,5 @@ Tasks and relating files are taken from: https://github.com/HPI-Information-Syst
 
 ### Includes Assignments:
 2. *Akka*: LargeMessageProxy
-3. *Akka*: Passwort Cracking
+3. *Akka*: Password Cracking
 4. *Spark*: Unary INDs
